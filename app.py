@@ -6,7 +6,7 @@ import time
 import plotly.express as px
 import streamlit.components.v1 as components
 import requests
-
+import requests
 # JavaScript for persistence
 components.html("""
 <script>
@@ -127,6 +127,8 @@ col1, col2, col3 = st.columns(3)
 col1.metric(f"{st.session_state.selected_asset} Price", f"${selected_price:,.2f}", "Live from CoinGecko")
 prediction = get_prediction(st.session_state.selected_asset)
 col2.metric("Prediction Score", f"{prediction['score']:.1%}")
+selected_price = prices.get(st.session_state.selected_asset, 65000)
+col1, col2, col3 = st.columns(3)
 col3.metric("Signal", prediction['signal'])
 
 # Executor - FREE TRADES DEPLETES FIRST
