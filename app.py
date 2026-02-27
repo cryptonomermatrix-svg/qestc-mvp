@@ -156,7 +156,7 @@ else:
     st.info("Run a simulated trade to see results.")
 
 st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
-=======
+
 import streamlit as st
 import pandas as pd
 import numpy as np
