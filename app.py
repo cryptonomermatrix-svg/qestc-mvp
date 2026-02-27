@@ -43,11 +43,15 @@ if 'last_price_fetch' not in st.session_state:
 if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {"BTC": 65000, "ETH": 1900, "SOL": 80}
 
-# Fetch live prices
+# Fetch live prices with longer cache to avoid 429 errors
 def fetch_prices():
+    # Use cached prices if less than 5 minutes old
+    if 'last_price_fetch' in st.session_state and time.time() - st.session_state.last_price_fetch < 300:
+        return st.session_state.current_prices
+
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd"
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         prices = {
@@ -58,9 +62,15 @@ def fetch_prices():
         st.session_state.current_prices = prices
         st.session_state.last_price_fetch = time.time()
         return prices
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 429:
+            st.info("CoinGecko rate limit reached. Using cached prices for now.")
+        else:
+            st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
+        return st.session_state.get('current_prices', {"BTC": 65000, "ETH": 1900, "SOL": 80})
     except Exception as e:
         st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
-        return st.session_state.current_prices
+        return st.session_state.get('current_prices', {"BTC": 65000, "ETH": 1900, "SOL": 80})
 
 if time.time() - st.session_state.last_price_fetch > 60:
     fetch_prices()
