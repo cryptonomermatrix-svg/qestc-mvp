@@ -6,11 +6,6 @@ import time
 import plotly.express as px
 import streamlit.components.v1 as components
 import requests
-from solana.rpc.api import Client
-from solders.keypair import Keypair
-from solders.pubkey import Pubkey
-from spl.token.instructions import mint_to, burn_checked
-from spl.token.constants import TOKEN_PROGRAM_ID
 
 # JavaScript for persistence
 components.html("""
@@ -48,42 +43,9 @@ if 'last_price_fetch' not in st.session_state:
 if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {"BTC": 65000, "ETH": 1900, "SOL": 80}
 
-# Mock Solana setup for MVP (Devnet)
-sol_client = Client("https://api.devnet.solana.com")
-mock_mint_authority = Keypair()  # Mock authority for mint/burn
-mock_token_mint = Pubkey.from_string("So11111111111111111111111111111111111111112")  # Mock mint (use real CRYPT mint later)
-mock_user_account = Pubkey.from_string("11111111111111111111111111111111")  # Mock user token account
-
-def mock_mint_crypt(amount):
-    try:
-        # Mock mint instruction
-        tx = mint_to(
-            TOKEN_PROGRAM_ID,
-            mock_token_mint,
-            mock_user_account,
-            mock_mint_authority.pubkey(),
-            amount * 10**9  # 9 decimals
-        )
-        return f"Mock minted {amount} CRYPT tokens on Devnet"
-    except Exception as e:
-        return f"Mint failed: {str(e)}"
-
-def mock_burn_crypt(amount):
-    try:
-        # Mock burn instruction
-        tx = burn_checked(
-            TOKEN_PROGRAM_ID,
-            mock_user_account,
-            mock_token_mint,
-            mock_user_account,
-            amount * 10**9
-        )
-        return f"Mock burned {amount} CRYPT tokens"
-    except Exception as e:
-        return f"Burn failed: {str(e)}"
-
-# Fetch live prices
+# Fetch live prices with longer cache to avoid 429 errors
 def fetch_prices():
+    # Use cached prices if less than 5 minutes old
     if 'last_price_fetch' in st.session_state and time.time() - st.session_state.last_price_fetch < 300:
         return st.session_state.current_prices
 
@@ -102,7 +64,7 @@ def fetch_prices():
         return prices
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 429:
-            st.info("CoinGecko rate limit reached. Using cached prices.")
+            st.info("CoinGecko rate limit reached. Using cached prices for now.")
         else:
             st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
         return st.session_state.get('current_prices', {"BTC": 65000, "ETH": 1900, "SOL": 80})
@@ -138,10 +100,8 @@ st.sidebar.header("QESTC Controls")
 st.session_state.selected_asset = st.sidebar.selectbox("Select Asset", ["BTC", "ETH", "SOL", "XRP", "ADA"])
 token_purchase = st.sidebar.number_input("Buy CRYPT Tokens ($1 = 5 tokens)", min_value=0, step=1)
 if st.sidebar.button("Purchase Tokens"):
-    minted = mock_mint_crypt(token_purchase * 5)
     st.session_state.token_balance += token_purchase * 5
     st.sidebar.success(f"Added {token_purchase * 5} CRYPT tokens! Balance: {st.session_state.token_balance}")
-    st.sidebar.info(minted)
 
 st.sidebar.metric("CRYPT Balance", st.session_state.token_balance)
 st.sidebar.metric("Free Trades Left", max(0, st.session_state.max_free_trades - st.session_state.trade_count))
@@ -179,7 +139,7 @@ prediction = get_prediction(st.session_state.selected_asset)
 col2.metric("Prediction Score", f"{prediction['score']:.1%}")
 col3.metric("Signal", prediction['signal'])
 
-# Executor
+# Executor - FREE TRADES DEPLETES FIRST
 if st.button("Run Simulated Trade"):
     if st.session_state.is_pro:
         pass
@@ -187,8 +147,6 @@ if st.button("Run Simulated Trade"):
         st.session_state.trade_count += 1
     elif st.session_state.token_balance > 0:
         st.session_state.token_balance -= 1
-        burned = mock_burn_crypt(1)
-        st.info(burned)
     else:
         st.warning("No free trades or tokens left. Buy CRYPT or activate Pro.")
         st.stop()
