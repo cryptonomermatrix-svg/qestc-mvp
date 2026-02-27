@@ -313,4 +313,4 @@ else:
     st.info("Run a simulated trade to see results.")
 
 st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
->>>>>>> 8de69d9a23755c985d990a4edfc3857225570358
+8de69d9a23755c985d990a4edfc3857225570358
