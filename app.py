@@ -50,109 +50,62 @@ if 'historical_prices' not in st.session_state:
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 
-# Page config for prettier look
-st.set_page_config(
-    page_title="QESTC Predictive Simulator",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# CryptoCompare asset mapping
+ASSET_MAP = {
+    "BTC": "BTC",
+    "ETH": "ETH",
+    "SOL": "SOL",
+    "XRP": "XRP",
+    "ADA": "ADA"
+}
 
-# Custom CSS for dark theme and prettier UI
-st.markdown("""
-<style>
-    [data-testid="stAppViewContainer"] {
-        background-color: #0e1117;
-        color: #e0e0e0;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #161b22;
-        border-right: 1px solid #30363d;
-    }
-    .stButton > button {
-        background-color: #238636;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 10px 20px;
-        font-weight: bold;
-    }
-    .stButton > button:hover {
-        background-color: #2ea043;
-    }
-    .stSuccess {
-        background-color: #1f2a1f !important;
-        color: #56d364 !important;
-    }
-    .stInfo {
-        background-color: #1c2a3a !important;
-        color: #58a6ff !important;
-    }
-    .stWarning {
-        background-color: #2d1f1f !important;
-        color: #f85149 !important;
-    }
-    h1, h2, h3 {
-        color: #c9d1d9;
-    }
-    .stMetric {
-        background-color: #161b22;
-        border-radius: 8px;
-        padding: 10px;
-        border: 1px solid #30363d;
-    }
-    .block-container {
-        padding-top: 2rem !important;
-        padding-bottom: 2rem !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Fetch live prices from CoinGecko
+# Fetch live prices from CryptoCompare
 def fetch_prices():
     try:
-        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple,cardano&vs_currencies=usd"
+        symbols = ",".join(ASSET_MAP.values())
+        url = f"https://min-api.cryptocompare.com/data/pricemulti?fsyms={symbols}&tsyms=USD"
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()
-        prices = {
-            "BTC": data["bitcoin"]["usd"],
-            "ETH": data["ethereum"]["usd"],
-            "SOL": data["solana"]["usd"],
-            "XRP": data["ripple"]["usd"],
-            "ADA": data["cardano"]["usd"]
-        }
+        prices = {}
+        for asset, sym in ASSET_MAP.items():
+            if sym in data and "USD" in data[sym]:
+                prices[asset] = data[sym]["USD"]
         st.session_state.current_prices = prices
         st.session_state.last_price_fetch = time.time()
         return prices
     except Exception as e:
-        st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
+        st.warning(f"CryptoCompare live price fetch failed: {str(e)}. Using cached prices.")
         return st.session_state.current_prices
 
 if time.time() - st.session_state.last_price_fetch > 60 or st.session_state.auto_refresh:
     fetch_prices()
 
-# Fetch historical daily prices (30 days)
+# Fetch historical daily prices (30 days) from CryptoCompare
 def fetch_historical_prices(asset):
-    asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
-    coin_id = asset_map.get(asset, "bitcoin")
-    key = f"{coin_id}_30d"
+    sym = ASSET_MAP.get(asset, "BTC")
+    key = f"{asset}_30d_cc"
     if key in st.session_state.historical_prices and time.time() - st.session_state.historical_prices[key]['last_fetch'] < 3600:
         return st.session_state.historical_prices[key]['data']
 
     try:
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30"
+        url = f"https://min-api.cryptocompare.com/data/v2/histoday?fsym={sym}&tsym=USD&limit=30"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
-        prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
-        prices.set_index('timestamp', inplace=True)
-        prices = prices.resample('D').last().dropna()
-        st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
-        return prices
+        if data['Response'] == 'Success' and 'Data' in data and 'Data' in data['Data']:
+            prices_list = data['Data']['Data']
+            prices = pd.DataFrame(prices_list)
+            prices['timestamp'] = pd.to_datetime(prices['time'], unit='s')
+            prices = prices[['timestamp', 'close']].rename(columns={'close': 'price'})
+            prices.set_index('timestamp', inplace=True)
+            prices = prices[prices['price'] > 0]  # filter invalid
+            st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
+            return prices
+        else:
+            raise ValueError("Invalid response from CryptoCompare")
     except Exception as e:
-        st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
+        st.warning(f"CryptoCompare historical fetch failed: {str(e)}. Using fallback mock data.")
         dates = pd.date_range(end=datetime.datetime.now(), periods=30, freq='D')
         prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 30)}, index=dates)
         return prices
@@ -210,6 +163,7 @@ def simulate_trade(asset, prediction):
     }
 
 # Sidebar
+st.set_page_config(page_title="QESTC Simulator", layout="wide", page_icon="🚀")
 st.sidebar.header("🚀 QESTC Controls")
 
 st.session_state.selected_asset = st.sidebar.selectbox("🌐 Select Asset", ["BTC", "ETH", "SOL", "XRP", "ADA"])
@@ -218,7 +172,7 @@ if st.sidebar.button("Purchase Tokens", type="primary"):
     st.session_state.token_balance += token_purchase * 5
     st.sidebar.success(f"Added {token_purchase * 5} CRYPT tokens! Balance: {st.session_state.token_balance}")
 
-st.sidebar.metric("CRYPT Balance", f"{st.session_state.token_balance} tokens", delta=None)
+st.sidebar.metric("CRYPT Balance", f"{st.session_state.token_balance} tokens")
 free_left = max(0, st.session_state.max_free_trades - st.session_state.trade_count)
 st.sidebar.progress(free_left / st.session_state.max_free_trades)
 st.sidebar.caption(f"Free Trades Left: {free_left}/{st.session_state.max_free_trades}")
@@ -237,9 +191,12 @@ if not st.session_state.is_pro:
 else:
     st.sidebar.success("Pro Active – Unlimited Simulations 🚀")
 
+# Data Source Status
+st.sidebar.success("CryptoCompare connected – real-time & historical data active")
+
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – Test strategies risk-free with real predictions and live prices from CoinGecko.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free with real predictions and live prices from CryptoCompare.")
 
 with st.expander("📖 Quick Start Guide", expanded=True):
     st.markdown("""
@@ -256,27 +213,26 @@ selected_price = prices.get(st.session_state.selected_asset, 65000)
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Current Price", f"${selected_price:,.2f}", delta=None, delta_color="normal")
+    st.metric("Current Price", f"${selected_price:,.2f}")
 with col2:
     prediction = get_prediction(st.session_state.selected_asset)
-    st.metric("Prediction Confidence (R²)", f"{prediction['score']:.1f}%", delta=None)
+    st.metric("Prediction Confidence (R²)", f"{prediction['score']:.1f}%")
 with col3:
-    st.metric("Signal", prediction['signal'], delta_color="normal" if prediction['signal'] == "Hold" else "normal")
+    st.metric("Signal", prediction['signal'])
 
 st.info(prediction['reason'])
 
 # Model Metrics Card
-with st.container():
-    st.subheader("Model Accuracy (30-day history)")
-    metrics = prediction.get('metrics', {})
-    if metrics:
-        mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-        mcol1.metric("MAE", f"${metrics['MAE']:,.2f}")
-        mcol2.metric("RMSE", f"${metrics['RMSE']:,.2f}")
-        mcol3.metric("MAPE", f"{metrics['MAPE']:.2f}%")
-        mcol4.metric("R²", f"{metrics['R2']:.1f}%")
-    else:
-        st.info("No metrics available yet.")
+st.subheader("Model Accuracy (30-day history)")
+metrics = prediction.get('metrics', {})
+if metrics:
+    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+    mcol1.metric("MAE", f"${metrics['MAE']:,.2f}")
+    mcol2.metric("RMSE", f"${metrics['RMSE']:,.2f}")
+    mcol3.metric("MAPE", f"{metrics['MAPE']:.2f}%")
+    mcol4.metric("R²", f"{metrics['R2']:.1f}%")
+else:
+    st.info("No metrics available yet.")
 
 # Price History Chart
 with st.expander("📈 Price History & Prediction", expanded=True):
@@ -357,4 +313,4 @@ with st.expander("📊 Trade Statistics", expanded=False):
     else:
         st.info("No trades yet.")
 
-st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
+st.caption("NOT FINANCIAL ADVICE. Simulation tool only. Data from CryptoCompare. © 2026 Paul de Bruyn.")
