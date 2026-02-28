@@ -47,6 +47,8 @@ if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {"BTC": 65000, "ETH": 1900, "SOL": 80}
 if 'historical_prices' not in st.session_state:
     st.session_state.historical_prices = {}
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = False
 
 # Fetch live prices
 def fetch_prices():
@@ -67,7 +69,7 @@ def fetch_prices():
         st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
         return st.session_state.current_prices
 
-if time.time() - st.session_state.last_price_fetch > 60:
+if time.time() - st.session_state.last_price_fetch > 60 or st.session_state.auto_refresh:
     fetch_prices()
 
 # Fetch historical prices (30 days daily)
@@ -122,17 +124,17 @@ def get_prediction(asset):
     signal = "Buy" if predicted_price > current_price * 1.005 else "Sell" if predicted_price < current_price * 0.995 else "Hold"
     reason = f"Predicted next day: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
 
-    # Chart data
     chart_df = prices.copy()
     chart_df['predicted'] = np.nan
-    chart_df.loc[chart_df.index[-1], 'predicted'] = predicted_price  # show prediction point
+    chart_df.loc[chart_df.index[-1], 'predicted'] = predicted_price
 
     return {
         "score": score,
         "signal": signal,
         "reason": reason,
         "metrics": {"MAE": mae, "RMSE": rmse, "MAPE": mape, "R2": r2},
-        "chart_data": chart_df
+        "chart_data": chart_df,
+        "predicted_price": predicted_price
     }
 
 # Mock simulate trade
@@ -160,6 +162,8 @@ if st.sidebar.button("Purchase Tokens"):
 st.sidebar.metric("CRYPT Balance", st.session_state.token_balance)
 st.sidebar.metric("Free Trades Left", max(0, st.session_state.max_free_trades - st.session_state.trade_count))
 
+st.sidebar.checkbox("Auto-refresh live prices", value=st.session_state.auto_refresh, key="auto_refresh")
+
 # Pro Activation
 if not st.session_state.is_pro:
     pro_key = st.sidebar.text_input("Pro Key (for unlimited)", type="password")
@@ -174,14 +178,15 @@ else:
 
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko. Real linear regression prediction model on 30-day history.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Real linear regression prediction model on 30-day history.")
 
 with st.expander("Quick Start Guide", expanded=True):
     st.markdown("""
     1. Buy CRYPT tokens ($1 = 5 tokens) for extra simulations.
     2. Select an asset.
     3. View real prediction (based on 30-day daily history) → Run simulated trade.
-    4. See results in ledger, model accuracy metrics, and price chart.
+    4. See results in ledger, model accuracy metrics, and price/profit charts.
+    5. Enable auto-refresh for live price updates.
     """)
 
 # Live Price Display
@@ -213,8 +218,8 @@ with st.expander("Price History & Prediction", expanded=True):
     chart_data = prediction.get('chart_data')
     if chart_data is not None and not chart_data.empty:
         fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Price History")
-        fig.add_scatter(x=[chart_data.index[-1]], y=[prediction['metrics'].get('predicted_price', chart_data['price'].iloc[-1])],
-                        mode='markers', marker=dict(size=12, color='red'), name='Predicted Next')
+        fig.add_scatter(x=[chart_data.index[-1]], y=[prediction.get('predicted_price', chart_data['price'].iloc[-1])],
+                        mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Predicted Next Day')
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No historical chart available.")
@@ -249,8 +254,38 @@ with st.expander("Simulated Profit History", expanded=False):
         df = pd.DataFrame(st.session_state.trade_history)
         fig_profit = px.bar(df, x='time', y='profit_pct', color='outcome',
                             title="Profit/Loss per Simulated Trade",
-                            labels={'profit_pct': 'Profit/Loss (%)'})
+                            labels={'profit_pct': 'Profit/Loss (%)'},
+                            color_discrete_map={"Win": "green", "Loss": "red"})
         st.plotly_chart(fig_profit, use_container_width=True)
+    else:
+        st.info("No trades yet.")
+
+# Cumulative Profit Chart
+with st.expander("Cumulative Profit/Loss", expanded=False):
+    if st.session_state.trade_history:
+        df = pd.DataFrame(st.session_state.trade_history)
+        df['cumulative_profit'] = df['profit_pct'].cumsum()
+        fig_cum = px.line(df, x='time', y='cumulative_profit', title="Running Total Profit/Loss")
+        fig_cum.add_hline(y=0, line_dash="dash", line_color="gray")
+        st.plotly_chart(fig_cum, use_container_width=True)
+    else:
+        st.info("No trades yet.")
+
+# Trade Stats Summary
+with st.expander("Trade Statistics", expanded=False):
+    if st.session_state.trade_history:
+        df = pd.DataFrame(st.session_state.trade_history)
+        total_trades = len(df)
+        wins = len(df[df['outcome'] == 'Win'])
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        avg_profit = df['profit_pct'].mean()
+        total_pnl = df['profit_pct'].sum()
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Trades", total_trades)
+        col2.metric("Win Rate", f"{win_rate:.1f}%")
+        col3.metric("Avg Profit per Trade", f"{avg_profit:+.2f}%")
+        col4.metric("Total PnL", f"{total_pnl:+.2f}%")
     else:
         st.info("No trades yet.")
 
