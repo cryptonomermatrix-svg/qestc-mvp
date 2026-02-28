@@ -89,7 +89,6 @@ def fetch_historical_prices(asset):
         return prices
     except Exception as e:
         st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
-        # Fallback mock data
         dates = pd.date_range(end=datetime.datetime.now(), periods=720, freq='H')
         prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 720)}, index=dates)
         return prices
@@ -100,30 +99,25 @@ def get_prediction(asset):
     if len(prices) < 10:
         return {"score": 50.0, "signal": "Hold", "reason": "Insufficient historical data", "metrics": {}}
 
-    # Prepare data
-    prices = prices.resample('H').last().dropna()  # Hourly
+    prices = prices.resample('H').last().dropna()
     prices['time'] = np.arange(len(prices))
     X = prices['time'].values.reshape(-1, 1)
     y = prices['price'].values
 
-    # Train model
     model = LinearRegression()
     model.fit(X, y)
 
-    # Predict next hour
     next_time = len(prices)
     predicted_price = model.predict([[next_time]])[0]
     current_price = y[-1]
 
-    # Evaluate on historical data
     y_pred = model.predict(X)
     mae = mean_absolute_error(y, y_pred)
     rmse = np.sqrt(mean_squared_error(y, y_pred))
     mape = mean_absolute_percentage_error(y, y_pred) * 100
     r2 = r2_score(y, y_pred) * 100
 
-    # Signal & score
-    score = r2  # Use R² as prediction confidence score
+    score = r2
     signal = "Buy" if predicted_price > current_price * 1.005 else "Sell" if predicted_price < current_price * 0.995 else "Hold"
     reason = f"Predicted next hour: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
 
