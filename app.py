@@ -4,6 +4,7 @@ import numpy as np
 import datetime
 import time
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit.components.v1 as components
 import requests
 from sklearn.linear_model import LinearRegression
@@ -69,7 +70,7 @@ def fetch_prices():
 if time.time() - st.session_state.last_price_fetch > 60:
     fetch_prices()
 
-# Fetch historical prices (30 days daily — free API)
+# Fetch historical prices (30 days daily)
 def fetch_historical_prices(asset):
     asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
     coin_id = asset_map.get(asset, "bitcoin")
@@ -85,7 +86,7 @@ def fetch_historical_prices(asset):
         prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
         prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
         prices.set_index('timestamp', inplace=True)
-        prices = prices.resample('D').last().dropna()  # Daily resampling
+        prices = prices.resample('D').last().dropna()
         st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
         return prices
     except Exception as e:
@@ -98,7 +99,7 @@ def fetch_historical_prices(asset):
 def get_prediction(asset):
     prices = fetch_historical_prices(asset)
     if len(prices) < 10:
-        return {"score": 50.0, "signal": "Hold", "reason": "Insufficient historical data", "metrics": {}}
+        return {"score": 50.0, "signal": "Hold", "reason": "Insufficient historical data", "metrics": {}, "chart_data": None}
 
     prices['time'] = np.arange(len(prices))
     X = prices['time'].values.reshape(-1, 1)
@@ -121,11 +122,17 @@ def get_prediction(asset):
     signal = "Buy" if predicted_price > current_price * 1.005 else "Sell" if predicted_price < current_price * 0.995 else "Hold"
     reason = f"Predicted next day: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
 
+    # Chart data
+    chart_df = prices.copy()
+    chart_df['predicted'] = np.nan
+    chart_df.loc[chart_df.index[-1], 'predicted'] = predicted_price  # show prediction point
+
     return {
         "score": score,
         "signal": signal,
         "reason": reason,
-        "metrics": {"MAE": mae, "RMSE": rmse, "MAPE": mape, "R2": r2}
+        "metrics": {"MAE": mae, "RMSE": rmse, "MAPE": mape, "R2": r2},
+        "chart_data": chart_df
     }
 
 # Mock simulate trade
@@ -174,7 +181,7 @@ with st.expander("Quick Start Guide", expanded=True):
     1. Buy CRYPT tokens ($1 = 5 tokens) for extra simulations.
     2. Select an asset.
     3. View real prediction (based on 30-day daily history) → Run simulated trade.
-    4. See results in ledger and model accuracy metrics.
+    4. See results in ledger, model accuracy metrics, and price chart.
     """)
 
 # Live Price Display
@@ -201,6 +208,17 @@ with st.expander("Model Accuracy Metrics (on 30-day history)", expanded=False):
     else:
         st.info("No metrics available yet.")
 
+# Price History Chart
+with st.expander("Price History & Prediction", expanded=True):
+    chart_data = prediction.get('chart_data')
+    if chart_data is not None and not chart_data.empty:
+        fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Price History")
+        fig.add_scatter(x=[chart_data.index[-1]], y=[prediction['metrics'].get('predicted_price', chart_data['price'].iloc[-1])],
+                        mode='markers', marker=dict(size=12, color='red'), name='Predicted Next')
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No historical chart available.")
+
 # Executor
 if st.button("Run Simulated Trade"):
     if st.session_state.is_pro:
@@ -224,5 +242,16 @@ if st.session_state.trade_history:
     st.dataframe(df.style.format({"profit_pct": "{:+.2f}%"}))
 else:
     st.info("Run a simulated trade to see results.")
+
+# Profit History Chart
+with st.expander("Simulated Profit History", expanded=False):
+    if st.session_state.trade_history:
+        df = pd.DataFrame(st.session_state.trade_history)
+        fig_profit = px.bar(df, x='time', y='profit_pct', color='outcome',
+                            title="Profit/Loss per Simulated Trade",
+                            labels={'profit_pct': 'Profit/Loss (%)'})
+        st.plotly_chart(fig_profit, use_container_width=True)
+    else:
+        st.info("No trades yet.")
 
 st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
