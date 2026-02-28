@@ -10,7 +10,7 @@ import requests
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
 
-# Polygon API key from Streamlit secrets (securely stored)
+# Polygon API key from Streamlit secrets (secure)
 POLYGON_API_KEY = st.secrets["POLYGON_API_KEY"]
 
 # JavaScript for persistence
@@ -70,12 +70,13 @@ def fetch_prices():
             response.raise_for_status()
             data = response.json()
             if 'results' in data and 'p' in data['results']:
-                prices[symbol.split(':')[1][:3]] = data['results']['p']
+                asset_key = symbol.split(':')[1][:3]
+                prices[asset_key] = data['results']['p']
         st.session_state.current_prices = prices
         st.session_state.last_price_fetch = time.time()
         return prices
     except Exception as e:
-        st.warning(f"Polygon price fetch failed: {str(e)}. Using last known prices.")
+        st.warning(f"Polygon live price fetch failed: {str(e)}. Using cached prices.")
         return st.session_state.current_prices
 
 if time.time() - st.session_state.last_price_fetch > 60:
@@ -84,7 +85,7 @@ if time.time() - st.session_state.last_price_fetch > 60:
 # Fetch historical daily bars (30 days) from Polygon
 def fetch_historical_prices(asset):
     ticker = ASSET_MAP.get(asset, "X:BTCUSD")
-    key = f"{asset}_30d"
+    key = f"{asset}_30d_polygon"
     if key in st.session_state.historical_prices and time.time() - st.session_state.historical_prices[key]['last_fetch'] < 3600:
         return st.session_state.historical_prices[key]['data']
 
@@ -103,9 +104,9 @@ def fetch_historical_prices(asset):
             st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
             return prices
         else:
-            raise ValueError("No results in response")
+            raise ValueError("No results in Polygon response")
     except Exception as e:
-        st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
+        st.warning(f"Polygon historical fetch failed: {str(e)}. Using fallback mock data.")
         dates = pd.date_range(end=datetime.datetime.now(), periods=30, freq='D')
         prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 30)}, index=dates)
         return prices
