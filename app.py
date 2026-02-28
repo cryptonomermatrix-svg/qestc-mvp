@@ -69,7 +69,7 @@ def fetch_prices():
 if time.time() - st.session_state.last_price_fetch > 60:
     fetch_prices()
 
-# Fetch historical prices (30 days hourly)
+# Fetch historical prices (30 days daily — free API)
 def fetch_historical_prices(asset):
     asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
     coin_id = asset_map.get(asset, "bitcoin")
@@ -78,19 +78,20 @@ def fetch_historical_prices(asset):
         return st.session_state.historical_prices[key]['data']
 
     try:
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30&interval=hourly"
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
         prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
         prices.set_index('timestamp', inplace=True)
+        prices = prices.resample('D').last().dropna()  # Daily resampling
         st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
         return prices
     except Exception as e:
         st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
-        dates = pd.date_range(end=datetime.datetime.now(), periods=720, freq='H')
-        prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 720)}, index=dates)
+        dates = pd.date_range(end=datetime.datetime.now(), periods=30, freq='D')
+        prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 30)}, index=dates)
         return prices
 
 # Real linear regression prediction
@@ -99,7 +100,6 @@ def get_prediction(asset):
     if len(prices) < 10:
         return {"score": 50.0, "signal": "Hold", "reason": "Insufficient historical data", "metrics": {}}
 
-    prices = prices.resample('H').last().dropna()
     prices['time'] = np.arange(len(prices))
     X = prices['time'].values.reshape(-1, 1)
     y = prices['price'].values
@@ -119,7 +119,7 @@ def get_prediction(asset):
 
     score = r2
     signal = "Buy" if predicted_price > current_price * 1.005 else "Sell" if predicted_price < current_price * 0.995 else "Hold"
-    reason = f"Predicted next hour: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
+    reason = f"Predicted next day: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
 
     return {
         "score": score,
@@ -167,13 +167,13 @@ else:
 
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko. Real linear regression prediction model.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko. Real linear regression prediction model on 30-day history.")
 
 with st.expander("Quick Start Guide", expanded=True):
     st.markdown("""
     1. Buy CRYPT tokens ($1 = 5 tokens) for extra simulations.
     2. Select an asset.
-    3. View real prediction (based on 30-day history) → Run simulated trade.
+    3. View real prediction (based on 30-day daily history) → Run simulated trade.
     4. See results in ledger and model accuracy metrics.
     """)
 
