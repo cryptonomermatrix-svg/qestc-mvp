@@ -6,6 +6,8 @@ import time
 import plotly.express as px
 import streamlit.components.v1 as components
 import requests
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
 
 # JavaScript for persistence
 components.html("""
@@ -42,6 +44,8 @@ if 'last_price_fetch' not in st.session_state:
     st.session_state.last_price_fetch = time.time() - 70
 if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {"BTC": 65000, "ETH": 1900, "SOL": 80}
+if 'historical_prices' not in st.session_state:
+    st.session_state.historical_prices = {}
 
 # Fetch live prices
 def fetch_prices():
@@ -65,11 +69,70 @@ def fetch_prices():
 if time.time() - st.session_state.last_price_fetch > 60:
     fetch_prices()
 
-# Mock prediction
+# Fetch historical prices (30 days hourly)
+def fetch_historical_prices(asset):
+    asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
+    coin_id = asset_map.get(asset, "bitcoin")
+    key = f"{coin_id}_30d"
+    if key in st.session_state.historical_prices and time.time() - st.session_state.historical_prices[key]['last_fetch'] < 3600:
+        return st.session_state.historical_prices[key]['data']
+
+    try:
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30&interval=hourly"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
+        prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
+        prices.set_index('timestamp', inplace=True)
+        st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
+        return prices
+    except Exception as e:
+        st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
+        # Fallback mock data
+        dates = pd.date_range(end=datetime.datetime.now(), periods=720, freq='H')
+        prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 720)}, index=dates)
+        return prices
+
+# Real linear regression prediction
 def get_prediction(asset):
-    score = np.random.uniform(70, 99)
-    signal = "Buy" if np.random.rand() > 0.5 else "Sell"
-    return {"score": score / 100, "signal": signal, "reason": f"Mock: {asset} trend"}
+    prices = fetch_historical_prices(asset)
+    if len(prices) < 10:
+        return {"score": 50.0, "signal": "Hold", "reason": "Insufficient historical data", "metrics": {}}
+
+    # Prepare data
+    prices = prices.resample('H').last().dropna()  # Hourly
+    prices['time'] = np.arange(len(prices))
+    X = prices['time'].values.reshape(-1, 1)
+    y = prices['price'].values
+
+    # Train model
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Predict next hour
+    next_time = len(prices)
+    predicted_price = model.predict([[next_time]])[0]
+    current_price = y[-1]
+
+    # Evaluate on historical data
+    y_pred = model.predict(X)
+    mae = mean_absolute_error(y, y_pred)
+    rmse = np.sqrt(mean_squared_error(y, y_pred))
+    mape = mean_absolute_percentage_error(y, y_pred) * 100
+    r2 = r2_score(y, y_pred) * 100
+
+    # Signal & score
+    score = r2  # Use R² as prediction confidence score
+    signal = "Buy" if predicted_price > current_price * 1.005 else "Sell" if predicted_price < current_price * 0.995 else "Hold"
+    reason = f"Predicted next hour: ${predicted_price:,.2f} (vs current ${current_price:,.2f}). Model fit: R² {r2:.1f}%"
+
+    return {
+        "score": score,
+        "signal": signal,
+        "reason": reason,
+        "metrics": {"MAE": mae, "RMSE": rmse, "MAPE": mape, "R2": r2}
+    }
 
 # Mock simulate trade
 def simulate_trade(asset, prediction):
@@ -110,14 +173,14 @@ else:
 
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko. Real linear regression prediction model.")
 
 with st.expander("Quick Start Guide", expanded=True):
     st.markdown("""
     1. Buy CRYPT tokens ($1 = 5 tokens) for extra simulations.
     2. Select an asset.
-    3. View live prediction → Run simulated trade.
-    4. See results in ledger.
+    3. View real prediction (based on 30-day history) → Run simulated trade.
+    4. See results in ledger and model accuracy metrics.
     """)
 
 # Live Price Display
@@ -125,11 +188,26 @@ prices = fetch_prices()
 selected_price = prices.get(st.session_state.selected_asset, 65000)
 col1, col2, col3 = st.columns(3)
 col1.metric(f"{st.session_state.selected_asset} Price", f"${selected_price:,.2f}", "Live from CoinGecko")
+
 prediction = get_prediction(st.session_state.selected_asset)
-col2.metric("Prediction Score", f"{prediction['score']:.1%}")
+col2.metric("Prediction Score (R²)", f"{prediction['score']:.1f}%")
 col3.metric("Signal", prediction['signal'])
 
-# Executor - FREE TRADES DEPLETES FIRST
+st.info(prediction['reason'])
+
+# Model Metrics
+with st.expander("Model Accuracy Metrics (on 30-day history)", expanded=False):
+    metrics = prediction.get('metrics', {})
+    if metrics:
+        colm1, colm2, colm3, colm4 = st.columns(4)
+        colm1.metric("MAE", f"${metrics['MAE']:,.2f}")
+        colm2.metric("RMSE", f"${metrics['RMSE']:,.2f}")
+        colm3.metric("MAPE", f"{metrics['MAPE']:.2f}%")
+        colm4.metric("R²", f"{metrics['R2']:.1f}%")
+    else:
+        st.info("No metrics available yet.")
+
+# Executor
 if st.button("Run Simulated Trade"):
     if st.session_state.is_pro:
         pass
