@@ -10,9 +10,6 @@ import requests
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error, r2_score
 
-# Polygon API key from Streamlit secrets (securely stored)
-POLYGON_API_KEY = st.secrets["POLYGON_API_KEY"]
-
 # JavaScript for persistence
 components.html("""
 <script>
@@ -50,60 +47,52 @@ if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {"BTC": 65000, "ETH": 1900, "SOL": 80}
 if 'historical_prices' not in st.session_state:
     st.session_state.historical_prices = {}
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = False
 
-# Polygon asset mapping
-ASSET_MAP = {
-    "BTC": "X:BTCUSD",
-    "ETH": "X:ETHUSD",
-    "SOL": "X:SOLUSD",
-    "XRP": "X:XRPUSD",
-    "ADA": "X:ADAUSD"
-}
-
-# Fetch live prices from Polygon
+# Fetch live prices from CoinGecko
 def fetch_prices():
     try:
-        prices = {}
-        for symbol in ASSET_MAP.values():
-            url = f"https://api.polygon.io/v2/last/trade/{symbol}?apiKey={POLYGON_API_KEY}"
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            if 'results' in data and 'p' in data['results']:
-                prices[symbol.split(':')[1][:3]] = data['results']['p']
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple,cardano&vs_currencies=usd"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        prices = {
+            "BTC": data["bitcoin"]["usd"],
+            "ETH": data["ethereum"]["usd"],
+            "SOL": data["solana"]["usd"],
+            "XRP": data["ripple"]["usd"],
+            "ADA": data["cardano"]["usd"]
+        }
         st.session_state.current_prices = prices
         st.session_state.last_price_fetch = time.time()
         return prices
     except Exception as e:
-        st.warning(f"Polygon price fetch failed: {str(e)}. Using last known prices.")
+        st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
         return st.session_state.current_prices
 
-if time.time() - st.session_state.last_price_fetch > 60:
+if time.time() - st.session_state.last_price_fetch > 60 or st.session_state.auto_refresh:
     fetch_prices()
 
-# Fetch historical daily bars (30 days) from Polygon
+# Fetch historical daily prices (30 days) from CoinGecko
 def fetch_historical_prices(asset):
-    ticker = ASSET_MAP.get(asset, "X:BTCUSD")
-    key = f"{asset}_30d"
+    asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
+    coin_id = asset_map.get(asset, "bitcoin")
+    key = f"{coin_id}_30d"
     if key in st.session_state.historical_prices and time.time() - st.session_state.historical_prices[key]['last_fetch'] < 3600:
         return st.session_state.historical_prices[key]['data']
 
     try:
-        from_date = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-        to_date = datetime.datetime.now().strftime('%Y-%m-%d')
-        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{from_date}/{to_date}?adjusted=true&sort=asc&limit=120&apiKey={POLYGON_API_KEY}"
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        if 'results' in data:
-            prices = pd.DataFrame(data['results'])
-            prices['timestamp'] = pd.to_datetime(prices['t'], unit='ms')
-            prices = prices[['timestamp', 'c']].rename(columns={'c': 'price'})
-            prices.set_index('timestamp', inplace=True)
-            st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
-            return prices
-        else:
-            raise ValueError("No results in response")
+        prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
+        prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
+        prices.set_index('timestamp', inplace=True)
+        prices = prices.resample('D').last().dropna()
+        st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
+        return prices
     except Exception as e:
         st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
         dates = pd.date_range(end=datetime.datetime.now(), periods=30, freq='D')
@@ -189,18 +178,15 @@ if not st.session_state.is_pro:
 else:
     st.sidebar.success("Pro Active – Unlimited Simulations")
 
-# Polygon API Status
-st.sidebar.success("Polygon API connected – real-time & historical data active")
-
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Real-time prices & predictions from Polygon.io.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free. Prices live from CoinGecko. Real linear regression prediction model on 30-day history.")
 
 with st.expander("Quick Start Guide", expanded=True):
     st.markdown("""
     1. Buy CRYPT tokens ($1 = 5 tokens) for extra simulations.
     2. Select an asset.
-    3. View real prediction (based on 30-day history) → Run simulated trade.
+    3. View real prediction (based on 30-day daily history) → Run simulated trade.
     4. See results in ledger, model accuracy metrics, and charts.
     5. Enable auto-refresh for live price updates.
     """)
@@ -209,7 +195,7 @@ with st.expander("Quick Start Guide", expanded=True):
 prices = fetch_prices()
 selected_price = prices.get(st.session_state.selected_asset, 65000)
 col1, col2, col3 = st.columns(3)
-col1.metric(f"{st.session_state.selected_asset} Price", f"${selected_price:,.2f}", "Live from Polygon.io")
+col1.metric(f"{st.session_state.selected_asset} Price", f"${selected_price:,.2f}", "Live from CoinGecko")
 
 prediction = get_prediction(st.session_state.selected_asset)
 col2.metric("Prediction Score (R²)", f"{prediction['score']:.1f}%")
@@ -233,7 +219,7 @@ with st.expander("Model Accuracy Metrics (on 30-day history)", expanded=False):
 with st.expander("Price History & Prediction", expanded=True):
     chart_data = prediction.get('chart_data')
     if chart_data is not None and not chart_data.empty:
-        fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Price History (Polygon)")
+        fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Price History")
         fig.add_scatter(x=[chart_data.index[-1]], y=[prediction.get('predicted_price', chart_data['price'].iloc[-1])],
                         mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Predicted Next Day')
         st.plotly_chart(fig, use_container_width=True)
