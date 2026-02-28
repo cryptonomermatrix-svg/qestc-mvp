@@ -50,62 +50,109 @@ if 'historical_prices' not in st.session_state:
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 
-# CryptoCompare asset mapping
-ASSET_MAP = {
-    "BTC": "BTC",
-    "ETH": "ETH",
-    "SOL": "SOL",
-    "XRP": "XRP",
-    "ADA": "ADA"
-}
+# Page config for prettier look
+st.set_page_config(
+    page_title="QESTC Predictive Simulator",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Fetch live prices from CryptoCompare
+# Custom CSS for dark theme and prettier UI
+st.markdown("""
+<style>
+    [data-testid="stAppViewContainer"] {
+        background-color: #0e1117;
+        color: #e0e0e0;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
+    }
+    .stButton > button {
+        background-color: #238636;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+    .stButton > button:hover {
+        background-color: #2ea043;
+    }
+    .stSuccess {
+        background-color: #1f2a1f !important;
+        color: #56d364 !important;
+    }
+    .stInfo {
+        background-color: #1c2a3a !important;
+        color: #58a6ff !important;
+    }
+    .stWarning {
+        background-color: #2d1f1f !important;
+        color: #f85149 !important;
+    }
+    h1, h2, h3 {
+        color: #c9d1d9;
+    }
+    .stMetric {
+        background-color: #161b22;
+        border-radius: 8px;
+        padding: 10px;
+        border: 1px solid #30363d;
+    }
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 2rem !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Fetch live prices from CoinGecko
 def fetch_prices():
     try:
-        symbols = ",".join(ASSET_MAP.values())
-        url = f"https://min-api.cryptocompare.com/data/pricemulti?fsyms={symbols}&tsyms=USD"
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple,cardano&vs_currencies=usd"
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()
-        prices = {}
-        for asset, sym in ASSET_MAP.items():
-            if sym in data and "USD" in data[sym]:
-                prices[asset] = data[sym]["USD"]
+        prices = {
+            "BTC": data["bitcoin"]["usd"],
+            "ETH": data["ethereum"]["usd"],
+            "SOL": data["solana"]["usd"],
+            "XRP": data["ripple"]["usd"],
+            "ADA": data["cardano"]["usd"]
+        }
         st.session_state.current_prices = prices
         st.session_state.last_price_fetch = time.time()
         return prices
     except Exception as e:
-        st.warning(f"CryptoCompare live price fetch failed: {str(e)}. Using cached prices.")
+        st.warning(f"Price fetch failed: {str(e)}. Using last known prices.")
         return st.session_state.current_prices
 
 if time.time() - st.session_state.last_price_fetch > 60 or st.session_state.auto_refresh:
     fetch_prices()
 
-# Fetch historical daily prices (30 days) from CryptoCompare
+# Fetch historical daily prices (30 days)
 def fetch_historical_prices(asset):
-    sym = ASSET_MAP.get(asset, "BTC")
-    key = f"{asset}_30d_cc"
+    asset_map = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple", "ADA": "cardano"}
+    coin_id = asset_map.get(asset, "bitcoin")
+    key = f"{coin_id}_30d"
     if key in st.session_state.historical_prices and time.time() - st.session_state.historical_prices[key]['last_fetch'] < 3600:
         return st.session_state.historical_prices[key]['data']
 
     try:
-        url = f"https://min-api.cryptocompare.com/data/v2/histoday?fsym={sym}&tsym=USD&limit=30"
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=30"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        if data['Response'] == 'Success' and 'Data' in data and 'Data' in data['Data']:
-            prices_list = data['Data']['Data']
-            prices = pd.DataFrame(prices_list)
-            prices['timestamp'] = pd.to_datetime(prices['time'], unit='s')
-            prices = prices[['timestamp', 'close']].rename(columns={'close': 'price'})
-            prices.set_index('timestamp', inplace=True)
-            prices = prices[prices['price'] > 0]  # filter invalid
-            st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
-            return prices
-        else:
-            raise ValueError("Invalid response from CryptoCompare")
+        prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
+        prices['timestamp'] = pd.to_datetime(prices['timestamp'], unit='ms')
+        prices.set_index('timestamp', inplace=True)
+        prices = prices.resample('D').last().dropna()
+        st.session_state.historical_prices[key] = {'data': prices, 'last_fetch': time.time()}
+        return prices
     except Exception as e:
-        st.warning(f"CryptoCompare historical fetch failed: {str(e)}. Using fallback mock data.")
+        st.warning(f"Historical data fetch failed: {str(e)}. Using mock data.")
         dates = pd.date_range(end=datetime.datetime.now(), periods=30, freq='D')
         prices = pd.DataFrame({'price': np.random.uniform(60000, 70000, 30)}, index=dates)
         return prices
@@ -163,7 +210,6 @@ def simulate_trade(asset, prediction):
     }
 
 # Sidebar
-st.set_page_config(page_title="QESTC Simulator", layout="wide", page_icon="🚀")
 st.sidebar.header("🚀 QESTC Controls")
 
 st.session_state.selected_asset = st.sidebar.selectbox("🌐 Select Asset", ["BTC", "ETH", "SOL", "XRP", "ADA"])
@@ -191,12 +237,9 @@ if not st.session_state.is_pro:
 else:
     st.sidebar.success("Pro Active – Unlimited Simulations 🚀")
 
-# Data Source Status
-st.sidebar.success("CryptoCompare connected – real-time & historical data active")
-
 # Main UI
 st.title("QESTC Predictive Simulator")
-st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free with real predictions and live prices from CryptoCompare.")
+st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free with real predictions and live prices from CoinGecko.")
 
 with st.expander("📖 Quick Start Guide", expanded=True):
     st.markdown("""
@@ -266,7 +309,9 @@ if st.button("Run Simulated Trade", type="primary", use_container_width=True):
 st.subheader("📋 Trade Ledger")
 if st.session_state.trade_history:
     df = pd.DataFrame(st.session_state.trade_history)
-    st.dataframe(df.style.format({"profit_pct": "{:+.2f}%"}).background_gradient(cmap='RdYlGn', subset=['profit_pct']), use_container_width=True)
+    # Simple formatting without background_gradient (avoids matplotlib)
+    styled_df = df.style.format({"profit_pct": "{:+.2f}%"})
+    st.dataframe(styled_df, use_container_width=True)
 else:
     st.info("Run a simulated trade to see results.")
 
@@ -305,12 +350,12 @@ with st.expander("📊 Trade Statistics", expanded=False):
         avg_profit = df['profit_pct'].mean()
         total_pnl = df['profit_pct'].sum()
 
-        scol1, scol2, scol3, scol4 = st.columns(4)
-        scol1.metric("Total Trades", total_trades)
-        scol2.metric("Win Rate", f"{win_rate:.1f}%")
-        scol3.metric("Avg Profit/Trade", f"{avg_profit:+.2f}%")
-        scol4.metric("Total PnL", f"{total_pnl:+.2f}%")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Trades", total_trades)
+        col2.metric("Win Rate", f"{win_rate:.1f}%")
+        col3.metric("Avg Profit/Trade", f"{avg_profit:+.2f}%")
+        col4.metric("Total PnL", f"{total_pnl:+.2f}%")
     else:
         st.info("No trades yet.")
 
-st.caption("NOT FINANCIAL ADVICE. Simulation tool only. Data from CryptoCompare. © 2026 Paul de Bruyn.")
+st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
