@@ -76,45 +76,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# TradingView symbol mapping (for embed)
-TV_SYMBOL_MAP = {
-    "BTC": "BINANCE:BTCUSDT",
-    "ETH": "BINANCE:ETHUSDT",
-    "SOL": "BINANCE:SOLUSDT",
-    "XRP": "BINANCE:XRPUSDT",
-    "ADA": "BINANCE:ADAUSDT"
-}
-
-# TradingView chart embed HTML
-def tradingview_chart_embed(symbol):
-    tv_html = f"""
-    <div class="tradingview-widget-container">
-      <div id="tradingview_chart"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget(
-      {{
-        "autosize": true,
-        "symbol": "{symbol}",
-        "interval": "D",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bg": "#f1f3f6",
-        "enable_publishing": false,
-        "allow_symbol_change": true,
-        "container_id": "tradingview_chart",
-        "height": 500,
-        "width": "100%"
-      }}
-      );
-      </script>
-    </div>
-    """
-    return tv_html
-
-# Fetch live prices from CoinGecko (fallback)
+# Fetch live prices from CoinGecko
 def fetch_prices():
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,ripple,cardano&vs_currencies=usd"
@@ -277,11 +239,6 @@ with st.expander("📖 Quick Start Guide", expanded=st.session_state.first_load)
     if st.session_state.first_load:
         st.session_state.first_load = False
 
-# TradingView Chart Embed (main feature addition)
-with st.expander("📊 Live TradingView Chart", expanded=True):
-    tv_symbol = TV_SYMBOL_MAP.get(st.session_state.selected_asset, "BINANCE:BTCUSDT")
-    st.components.v1.html(tradingview_chart_embed(tv_symbol), height=600)
-
 # Live Price & Prediction Cards
 prices = fetch_prices()
 selected_price = prices.get(st.session_state.selected_asset, 65000)
@@ -309,11 +266,11 @@ if metrics:
 else:
     st.info("No metrics available yet.")
 
-# Price History Chart (CoinGecko-based)
-with st.expander("📈 QESTC Model Price History & Prediction", expanded=False):
+# Price History Chart
+with st.expander("📈 Price History & Prediction", expanded=True):
     chart_data = prediction.get('chart_data')
     if chart_data is not None and not chart_data.empty:
-        fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Model History")
+        fig = px.line(chart_data, x=chart_data.index, y='price', title=f"{st.session_state.selected_asset} 30-Day Price History")
         fig.add_scatter(x=[chart_data.index[-1]], y=[prediction.get('predicted_price', chart_data['price'].iloc[-1])],
                         mode='markers', marker=dict(size=14, color='red', symbol='star'), name='Predicted Next Day')
         fig.update_layout(template='plotly_dark', height=400)
@@ -389,4 +346,5 @@ with st.expander("📊 Trade Statistics", expanded=False):
     else:
         st.info("No trades yet.")
 
-st.caption("NOT FINANCIAL ADVICE. Simulation tool only. © 2026 Paul de Bruyn.")
+# Fixed full caption text
+st.caption("NOT FINANCIAL ADVICE. Simulation tool only. Prices and historical data from CoinGecko. NOT a financial product. Use at your own risk. © 2026 Paul de Bruyn.")
