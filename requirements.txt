@@ -1,6 +1,8 @@
-streamlit
+streamlit>=1.30.0
+google-analytics-data>=0.18.0     # This is the correct package name
 pandas
 numpy
-plotly
-requests
+openai
+serpapi
 scikit-learn
+# Add any other dependencies your app uses, one per line
