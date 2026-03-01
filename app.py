@@ -1,3 +1,5 @@
+# app.py - Cryptonomer SEO Optimizer (updated March 2026 version)
+
 import streamlit as st
 from openai import OpenAI
 import pandas as pd
@@ -11,140 +13,224 @@ from sklearn.cluster import KMeans
 import serpapi
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
-from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric, Dimension
+from google.analytics.data_v1beta.types import (
+    RunReportRequest, DateRange, Metric, Dimension
+)
 
 # ────────────────────────────────────────────────
-#  CONFIG & SECRETS
+# PAGE CONFIG
 # ────────────────────────────────────────────────
 
-st.set_page_config(page_title="Cryptonomer SEO Optimizer", layout="wide")
-
-# Load secrets
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
-SERPAPI_API_KEY = st.secrets.get("SERPAPI_API_KEY", os.getenv("SERPAPI_API_KEY"))
-GA4_PROPERTY_ID = st.secrets.get("GA4_PROPERTY_ID", os.getenv("GA4_PROPERTY_ID"))
-
-if not OPENAI_API_KEY:
-    st.error("OpenAI API key not found.")
-    st.stop()
-
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
-# GA4 Credentials from secrets
-try:
-    credentials_info = st.secrets["gcp_service_account"]
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info,
-        scopes=["https://www.googleapis.com/auth/analytics.readonly"]
-    )
-    ga_client = BetaAnalyticsDataClient(credentials=credentials)
-except KeyError:
-    st.warning("GA4 credentials not found in secrets. GA4 features disabled.")
-    ga_client = None
+st.set_page_config(
+    page_title="Cryptonomer SEO Optimizer",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ────────────────────────────────────────────────
-#  SIDEBAR – CONTROLS
+# LOAD SECRETS SAFELY
 # ────────────────────────────────────────────────
 
-st.sidebar.title("Cryptonomer SEO Tool")
-st.sidebar.markdown("**Status:** Updated & Tested Version")
+def get_secret(key_name, fallback=None):
+    try:
+        return st.secrets[key_name]
+    except (KeyError, TypeError):
+        try:
+            # fallback for nested structure
+            return st.secrets["secrets"][key_name]
+        except (KeyError, TypeError):
+            return os.getenv(key_name, fallback)
 
-keywords_input = st.sidebar.text_area("Enter keywords (one per line)", 
-                                      value="blockchain decoding\ncrypto trading strategies\nelliptic curve cryptography",
-                                      height=120)
-start_date = st.sidebar.date_input("GA4 Start Date", value=pd.to_datetime("2024-01-01"))
-end_date = st.sidebar.date_input("GA4 End Date", value=pd.to_datetime("today"))
-
-run_button = st.sidebar.button("Run Full Analysis", type="primary")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
+SERPAPI_KEY    = get_secret("SERPAPI_API_KEY")
+GA4_PROPERTY_ID = get_secret("GA4_PROPERTY_ID")
 
 # ────────────────────────────────────────────────
-#  MAIN AREA
+# CLIENT INITIALIZATION WITH ERROR HANDLING
 # ────────────────────────────────────────────────
 
-st.title("SEO & Content Optimizer – Updated Version")
-st.markdown("""
-This version fixes indentation errors, re-enables GA4 with secrets, adds SERP/snippet optimization, and includes continual learning for math/logic (crypto-relevant).
-""")
+openai_client = None
+ga_client = None
 
-if run_button:
-    keywords = [k.strip() for k in keywords_input.split("\n") if k.strip()]
-
-    with st.spinner("Running analysis..."):
-        # Module 1: GA4 (if available)
-        ga_df = pd.DataFrame()
-        if ga_client and GA4_PROPERTY_ID:
-            try:
-                request = RunReportRequest(
-                    property=f'properties/{GA4_PROPERTY_ID}',
-                    date_ranges=[DateRange(start_date=start_date.strftime('%Y-%m-%d'), end_date=end_date.strftime('%Y-%m-%d'))],
-                    dimensions=[Dimension(name='pagePath')],
-                    metrics=[Metric(name='activeUsers')]
-                )
-                response = ga_client.run_report(request)
-                rows = [{'page': row.dimension_values[0].value, 'users': int(row.metric_values[0].value)} for row in response.rows]
-                ga_df = pd.DataFrame(rows)
-                st.subheader("GA4 Top Pages")
-                st.dataframe(ga_df.head(10))
-            except Exception as e:
-                st.error(f"GA4 error: {str(e)}")
-
-        # Module 2: SERP & Snippet Analysis
-        serp_results = {}
-        for kw in keywords:
-            params = {'q': kw, 'api_key': SERPAPI_API_KEY, 'num': 5}
-            results = serpapi.search(params).get('organic_results', [])
-            serp_results[kw] = [{'title': r['title'], 'snippet': r['snippet']} for r in results]
-
-        st.subheader("SERP Snippets")
-        for kw, res in serp_results.items():
-            st.markdown(f"**Keyword: {kw}**")
-            for r in res:
-                st.markdown(f"- **{r['title']}**: {r['snippet']}")
-
-        # GPT Snippet Optimization
-        prompt = f"Optimize these SERP snippets for better CTR: {json.dumps(serp_results)}"
-        response = openai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
-        optimized = response.choices[0].message.content
-        st.subheader("GPT-Optimized Snippets")
-        st.markdown(optimized)
-
-        # Module 3: Keyword Clustering
-        # Mock ranks for clustering
-        ranks = {kw: i+1 for i, kw in enumerate(keywords)}
-        data = pd.DataFrame({'keyword': keywords, 'rank': list(ranks.values())})
-        kmeans = KMeans(n_clusters=2)
-        data['cluster'] = kmeans.fit_predict(data[['rank']])
-        st.subheader("Keyword Clusters")
-        st.dataframe(data)
-
-        # Module 4: Continual Learning (Simple Math Net for Crypto e.g., Modular Arith)
-        class SimpleNet(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.fc = nn.Linear(2, 1)
-            def forward(self, x):
-                return self.fc(x)
-
-        model = SimpleNet()
-        # Train on mock task (e.g., mod operation)
-        x = torch.tensor([[5.0, 3.0], [10.0, 4.0]])
-        y = torch.tensor([[2.0], [2.0]])  # 5%3=2, 10%4=2
-        optimizer = optim.Adam(model.parameters())
-        loss_fn = nn.MSELoss()
-        for _ in range(100):
-            out = model(x)
-            loss = loss_fn(out, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        st.subheader("Continual Learning Demo (Modular Math)")
-        st.write(f"Trained MSE: {loss.item():.2f}")
-
-    st.success("Analysis complete!")
-
+if OPENAI_API_KEY and OPENAI_API_KEY.startswith("sk-"):
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        st.error(f"OpenAI client initialization failed: {str(e)}")
 else:
-    st.info("Enter keywords and click 'Run Full Analysis'.")
+    st.warning("OpenAI API key missing or invalid format → GPT features disabled")
 
-# Footer
-st.markdown("---")
-st.caption("Updated script – tested for syntax & basic runtime. Deploy to Streamlit Cloud.")
+if GA4_PROPERTY_ID:
+    try:
+        creds_info = st.secrets.get("gcp_service_account", {})
+        if creds_info:
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_info,
+                scopes=["https://www.googleapis.com/auth/analytics.readonly"]
+            )
+            ga_client = BetaAnalyticsDataClient(credentials=credentials)
+        else:
+            st.warning("gcp_service_account not found in secrets → GA4 disabled")
+    except Exception as e:
+        st.error(f"GA4 client failed: {str(e)}")
+else:
+    st.info("GA4 property ID not set → GA4 features disabled")
+
+# ────────────────────────────────────────────────
+# SIDEBAR
+# ────────────────────────────────────────────────
+
+with st.sidebar:
+    st.title("Cryptonomer SEO Tool")
+    st.markdown("**Version:** Updated 2026-03 • Stable")
+
+    keywords_text = st.text_area(
+        "Keywords (one per line)",
+        value="blockchain decoding\ncrypto trading strategies\nelliptic curve cryptography\nmodular arithmetic crypto",
+        height=140
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", value=pd.to_datetime("2025-01-01"))
+    with col2:
+        end_date = st.date_input("End Date", value=pd.to_datetime("today"))
+
+    analyze_btn = st.button("Run Full Analysis", type="primary", use_container_width=True)
+
+# ────────────────────────────────────────────────
+# MAIN CONTENT
+# ────────────────────────────────────────────────
+
+st.title("SEO & Content Optimizer")
+st.caption("Crypto-focused keyword analysis, SERP snippets, clustering & math learning demo")
+
+if analyze_btn:
+    keywords = [k.strip() for k in keywords_text.split("\n") if k.strip()]
+    if not keywords:
+        st.error("Please enter at least one keyword.")
+        st.stop()
+
+    with st.spinner("Processing analysis (this may take 10–40 seconds)..."):
+
+        tabs = st.tabs(["GA4", "SERP & Snippets", "Clusters", "Math Learning"])
+
+        # ── Tab 1: GA4 ────────────────────────────────────────
+        with tabs[0]:
+            if ga_client and GA4_PROPERTY_ID:
+                try:
+                    request = RunReportRequest(
+                        property=f'properties/{GA4_PROPERTY_ID}',
+                        date_ranges=[DateRange(
+                            start_date=start_date.strftime('%Y-%m-%d'),
+                            end_date=end_date.strftime('%Y-%m-%d')
+                        )],
+                        dimensions=[Dimension(name="pagePath")],
+                        metrics=[Metric(name="activeUsers")]
+                    )
+                    response = ga_client.run_report(request=request)
+                    rows = []
+                    for row in response.rows:
+                        rows.append({
+                            "page": row.dimension_values[0].value,
+                            "users": int(row.metric_values[0].value)
+                        })
+                    df_ga = pd.DataFrame(rows)
+                    if not df_ga.empty:
+                        st.subheader("Top Pages (by active users)")
+                        st.dataframe(df_ga.sort_values("users", ascending=False).head(10))
+                    else:
+                        st.info("No data returned for selected date range.")
+                except Exception as e:
+                    st.error(f"GA4 query failed: {str(e)}")
+            else:
+                st.info("GA4 not configured.")
+
+        # ── Tab 2: SERP & Snippets ─────────────────────────────
+        with tabs[1]:
+            if SERPAPI_KEY and openai_client:
+                serp_data = {}
+                for kw in keywords[:5]:  # limit to avoid quota burn
+                    try:
+                        params = {"q": kw, "api_key": SERPAPI_KEY, "num": 4}
+                        results = serpapi.search(params).get("organic_results", [])
+                        serp_data[kw] = [
+                            {"title": r.get("title", ""), "snippet": r.get("snippet", "")}
+                            for r in results
+                        ]
+                    except Exception as e:
+                        st.warning(f"SERP failed for '{kw}': {str(e)}")
+
+                if serp_data:
+                    st.subheader("Current Top SERP Snippets")
+                    for kw, items in serp_data.items():
+                        with st.expander(f"Keyword: {kw}"):
+                            for i, item in enumerate(items, 1):
+                                st.markdown(f"**{i}. {item['title']}**  \n{item['snippet']}")
+
+                    # GPT optimization
+                    try:
+                        prompt = (
+                            "You are a senior SEO copywriter for crypto content. "
+                            "Optimize these SERP snippets for higher CTR while keeping them natural "
+                            "and keyword-rich:\n\n" + json.dumps(serp_data, indent=2)
+                        )
+                        resp = openai_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.65,
+                            max_tokens=900
+                        )
+                        st.subheader("GPT-Optimized Snippet Suggestions")
+                        st.markdown(resp.choices[0].message.content)
+                    except Exception as e:
+                        st.error(f"GPT snippet optimization failed: {str(e)}")
+            else:
+                st.info("SERPAPI_KEY or OpenAI key missing → SERP analysis skipped.")
+
+        # ── Tab 3: Keyword Clusters ────────────────────────────
+        with tabs[2]:
+            if len(keywords) >= 2:
+                try:
+                    # Very simple clustering on dummy rank simulation
+                    ranks = {kw: i + 1 for i, kw in enumerate(keywords)}
+                    df = pd.DataFrame({"keyword": keywords, "mock_rank": list(ranks.values())})
+                    kmeans = KMeans(n_clusters=min(3, len(keywords)), n_init=10)
+                    df["cluster"] = kmeans.fit_predict(df[["mock_rank"]])
+                    st.subheader("Keyword Clustering (simple)")
+                    st.dataframe(df)
+                except Exception as e:
+                    st.error(f"Clustering failed: {str(e)}")
+            else:
+                st.info("Need ≥ 2 keywords for clustering demo.")
+
+        # ── Tab 4: Continual Learning Demo (Math / Crypto relevant) ──
+        with tabs[3]:
+            st.subheader("Simple Continual Learning – Modular Arithmetic Example")
+
+            class TinyNet(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.fc = nn.Linear(2, 1)
+
+                def forward(self, x):
+                    return self.fc(x)
+
+            model = TinyNet()
+            optimizer = optim.Adam(model.parameters(), lr=0.02)
+            loss_fn = nn.MSELoss()
+
+            # Mock crypto-mod data: a % b → remainder
+            x = torch.tensor([[7.0, 3.0], [13.0, 5.0], [23.0, 7.0]], dtype=torch.float32)
+            y = torch.tensor([[1.0], [3.0], [2.0]], dtype=torch.float32)  # 7%3=1, 13%5=3, 23%7=2
+
+            losses = []
+            for _ in range(180):
+                pred = model(x)
+                loss = loss_fn(pred, y)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
+
+            final_loss = losses[-1] if losses else 999
