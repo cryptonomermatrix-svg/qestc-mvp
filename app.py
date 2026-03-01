@@ -49,8 +49,10 @@ if 'historical_prices' not in st.session_state:
     st.session_state.historical_prices = {}
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
+if 'first_load' not in st.session_state:
+    st.session_state.first_load = True
 
-# Page config for prettier look
+# Page config
 st.set_page_config(
     page_title="QESTC Predictive Simulator",
     page_icon="🚀",
@@ -58,53 +60,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for dark theme and prettier UI
+# Custom CSS for dark theme & prettier UI
 st.markdown("""
 <style>
-    [data-testid="stAppViewContainer"] {
-        background-color: #0e1117;
-        color: #e0e0e0;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #161b22;
-        border-right: 1px solid #30363d;
-    }
-    .stButton > button {
-        background-color: #238636;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 10px 20px;
-        font-weight: bold;
-    }
-    .stButton > button:hover {
-        background-color: #2ea043;
-    }
-    .stSuccess {
-        background-color: #1f2a1f !important;
-        color: #56d364 !important;
-    }
-    .stInfo {
-        background-color: #1c2a3a !important;
-        color: #58a6ff !important;
-    }
-    .stWarning {
-        background-color: #2d1f1f !important;
-        color: #f85149 !important;
-    }
-    h1, h2, h3 {
-        color: #c9d1d9;
-    }
-    .stMetric {
-        background-color: #161b22;
-        border-radius: 8px;
-        padding: 10px;
-        border: 1px solid #30363d;
-    }
-    .block-container {
-        padding-top: 2rem !important;
-        padding-bottom: 2rem !important;
-    }
+    [data-testid="stAppViewContainer"] { background-color: #0e1117; color: #e0e0e0; }
+    [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
+    .stButton > button { background-color: #238636; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-weight: bold; }
+    .stButton > button:hover { background-color: #2ea043; }
+    .stSuccess { background-color: #1f2a1f !important; color: #56d364 !important; }
+    .stInfo { background-color: #1c2a3a !important; color: #58a6ff !important; }
+    .stWarning { background-color: #2d1f1f !important; color: #f85149 !important; }
+    h1, h2, h3 { color: #c9d1d9; }
+    .stMetric { background-color: #161b22; border-radius: 8px; padding: 10px; border: 1px solid #30363d; }
+    .block-container { padding-top: 2rem !important; padding-bottom: 2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,11 +205,30 @@ if not st.session_state.is_pro:
 else:
     st.sidebar.success("Pro Active – Unlimited Simulations 🚀")
 
+# PTC Help Section in Sidebar
+with st.sidebar.expander("👤 Who is QESTC for? (Persona-Task-Constraint)", expanded=False):
+    st.markdown("""
+    **Persona 1 – Beginner Trader**  
+    New to crypto, wants to learn without risk.  
+    **Main tasks**: Try predictions, run mock trades, understand signals.  
+    **Constraints**: Limited knowledge, no real money, simple UI.
+
+    **Persona 2 – Experienced Retail Trader**  
+    Active trader looking for an edge.  
+    **Main tasks**: Evaluate model accuracy, analyze charts, track performance.  
+    **Constraints**: Needs reliable data, transparent metrics, fast feedback.
+
+    **Persona 3 – Investor / Developer**  
+    Evaluating the tool for investment or partnership.  
+    **Main tasks**: Test demo, review roadmap, assess token economy.  
+    **Constraints**: Wants transparency, scalability, future on-chain potential.
+    """)
+
 # Main UI
 st.title("QESTC Predictive Simulator")
 st.markdown("**Simulation-only platform** – No real money traded. Test strategies risk-free with real predictions and live prices from CoinGecko.")
 
-with st.expander("📖 Quick Start Guide", expanded=True):
+with st.expander("📖 Quick Start Guide", expanded=st.session_state.first_load):
     st.markdown("""
     1. Buy CRYPT tokens for extra simulations.  
     2. Select an asset and view real prediction (based on 30-day history).  
@@ -249,6 +236,8 @@ with st.expander("📖 Quick Start Guide", expanded=True):
     4. Check model accuracy metrics and charts.  
     5. Enable auto-refresh for live updates.
     """)
+    if st.session_state.first_load:
+        st.session_state.first_load = False
 
 # Live Price & Prediction Cards
 prices = fetch_prices()
@@ -264,6 +253,9 @@ with col3:
     st.metric("Signal", prediction['signal'])
 
 st.info(prediction['reason'])
+
+if st.session_state.trade_count == 0 and not st.session_state.is_pro:
+    st.info("**Beginner tip**: Start with free trades to get familiar — no tokens needed yet!")
 
 # Model Metrics Card
 st.subheader("Model Accuracy (30-day history)")
@@ -309,7 +301,7 @@ if st.button("Run Simulated Trade", type="primary", use_container_width=True):
 st.subheader("📋 Trade Ledger")
 if st.session_state.trade_history:
     df = pd.DataFrame(st.session_state.trade_history)
-    # Simple formatting without background_gradient (avoids matplotlib)
+    # Simple formatting (no matplotlib)
     styled_df = df.style.format({"profit_pct": "{:+.2f}%"})
     st.dataframe(styled_df, use_container_width=True)
 else:
