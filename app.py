@@ -1,126 +1,219 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-import sqlite3
 import os
+import json
+import pandas as pd
+from datetime import datetime, timedelta
+from google.analytics.data_v1beta import BetaAnalyticsDataClient
+from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric, Dimension
+from openai import OpenAI
+import serpapi
+from sklearn.cluster import KMeans
+import sqlite3
+import unittest
 
-# Database for model states (persistent memory)
-DB_FILE = 'ai_memory.db'
+# Set API keys (replace with your own; better to use env vars)
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'your-ga4-credentials.json'  # Path to GA4 service account key
+OPENAI_API_KEY = 'your-openai-api-key'
+SERPAPI_API_KEY = 'your-serpapi-api-key'
+
+# Initialize clients
+ga_client = BetaAnalyticsDataClient()
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Database setup (SQLite for storing keywords, reports)
+DB_FILE = 'seo_data.db'
 conn = sqlite3.connect(DB_FILE)
 cursor = conn.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS models (task TEXT, state BLOB)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS keywords (keyword TEXT UNIQUE, rank INTEGER, cluster TEXT)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS reports (date TEXT, report TEXT)''')
 conn.commit()
 
-class SimpleNet(nn.Module):
-    """Basic neural net for math operations."""
-    def __init__(self):
-        super().__init__()
-        self.fc1 = nn.Linear(2, 64)
-        self.fc2 = nn.Linear(64, 1)
-    
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        return self.fc2(x)
+# Module 1: SEO and Optimization (GA4 Analysis)
+def get_ga_report(property_id, start_date, end_date):
+    """Pull GA4 report for pages and sessions."""
+    request = RunReportRequest(
+        property=f'properties/{property_id}',
+        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+        dimensions=[Dimension(name='pagePath')],
+        metrics=[Metric(name='activeUsers'), Metric(name='sessions')]
+    )
+    response = ga_client.run_report(request)
+    rows = []
+    for row in response.rows:
+        rows.append({
+            'page': row.dimension_values[0].value,
+            'users': int(row.metric_values[0].value),
+            'sessions': int(row.metric_values[1].value)
+        })
+    return pd.DataFrame(rows)
 
-# Generate data for math tasks
-def generate_data(task='add', size=100):
-    x = np.random.rand(size, 2) * 10
-    if task == 'add':
-        y = x[:,0] + x[:,1]
-    elif task == 'mul':
-        y = x[:,0] * x[:,1]
-    elif task == 'sub':  # Example extension
-        y = x[:,0] - x[:,1]
-    return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32).unsqueeze(1)
+def analyze_ga_metrics(report_df):
+    """Use GPT to analyze popular pages and suggest optimizations."""
+    most_pages = report_df.sort_values('users', ascending=False).head(10).to_json()
+    prompt = f"Analyze these popular pages: {most_pages}. Suggest SEO improvements and key SOPs."
+    response = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    return response.choices[0].message.content
 
-# Train with continual learning (replay buffer)
-def train(model, optimizer, loss_fn, data_x, data_y, epochs=200, replay_buffers=[]):
-    for epoch in range(epochs):
-        model.train()
-        # Replay old tasks to prevent forgetting
-        for rx, ry in replay_buffers:
-            out = model(rx)
-            loss = loss_fn(out, ry)
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-        # Current task
-        out = model(data_x)
-        loss = loss_fn(out, data_y)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-    return model
+def crawl_faqs(site_url):
+    """Placeholder for FAQ crawling; use GPT to generate/rephrase (integrate web scrape if needed)."""
+    prompt = f"Generate 5 FAQs for site: {site_url} related to crypto decoding."
+    response = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    faqs = response.choices[0].message.content
+    # Rephrase answers
+    rephrase_prompt = f"Rephrase these FAQs for better SEO: {faqs}"
+    rephrased = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": rephrase_prompt}]).choices[0].message.content
+    return rephrased
 
-# Test function
-def test(model, test_x, test_y):
-    model.eval()
-    with torch.no_grad():
-        pred = model(test_x)
-        mse = nn.MSELoss()(pred, test_y)
-    return mse.item()
-
-# Save/load model state
-def save_model(model, task):
-    state = torch.save(model.state_dict(), 'temp.pt')
-    with open('temp.pt', 'rb') as f:
-        blob = f.read()
-    cursor.execute("INSERT OR REPLACE INTO models (task, state) VALUES (?, ?)", (task, blob))
+# Module 2: SERP & Competitor Analysis
+def upload_keywords(keywords_list):
+    """Upload/store keywords."""
+    for kw in keywords_list:
+        cursor.execute("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (kw,))
     conn.commit()
-    os.remove('temp.pt')
+    return keywords_list
 
-def load_model(model, task):
-    cursor.execute("SELECT state FROM models WHERE task=?", (task,))
-    row = cursor.fetchone()
-    if row:
-        with open('temp.pt', 'wb') as f:
-            f.write(row[0])
-        model.load_state_dict(torch.load('temp.pt'))
-        os.remove('temp.pt')
-    return model
+def get_serp_results(keyword):
+    """Fetch SERP via serpapi."""
+    params = {'q': keyword, 'api_key': SERPAPI_API_KEY, 'num': 10}
+    results = serpapi.search(params)
+    organic = results.get('organic_results', [])
+    return [{'position': r['position'], 'title': r['title'], 'snippet': r['snippet'], 'link': r['link']} for r in organic]
 
-# Main continuous learning loop
-def continuous_learning(tasks=['add', 'mul'], property_id=None):  # Tie to previous GA4 if needed
-    model = SimpleNet()
-    optimizer = optim.Adam(model.parameters(), lr=0.005)
-    loss_fn = nn.MSELoss()
-    replay_buffers = []
-    
-    for i, task in enumerate(tasks):
-        # Load previous state if exists
-        if i > 0:
-            model = load_model(model, tasks[i-1])
-        
-        print(f"Learning Task: {task}")
-        train_x, train_y = generate_data(task, 200)
-        test_x, test_y = generate_data(task, 50)
-        
-        # Train with replays
-        model = train(model, optimizer, loss_fn, train_x, train_y, replay_buffers=replay_buffers)
-        
-        # Add to replay buffer (sample for efficiency)
-        replay_buffers.append((train_x[:50], train_y[:50]))
-        
-        # Test current and previous
-        current_mse = test(model, test_x, test_y)
-        print(f"{task.capitalize()} MSE: {current_mse:.2f}")
-        
-        for prev_task in tasks[:i]:
-            prev_test_x, prev_test_y = generate_data(prev_task, 50)
-            prev_mse = test(model, prev_test_x, prev_test_y)
-            print(f"Previous {prev_task.capitalize()} MSE after {task}: {prev_mse:.2f}")
-        
-        # Save state
-        save_model(model, task)
-    
-    # Backtest: Simulate on old data
-    print("\nBacktesting on historical tasks...")
-    for task in tasks:
-        hist_x, hist_y = generate_data(task, 50)  # Mock historical
-        hist_mse = test(model, hist_x, hist_y)
-        print(f"Backtest {task.capitalize()} MSE: {hist_mse:.2f}")
+def analyze_serp(keyword):
+    """Use GPT to analyze SERP, images, snippets."""
+    serp_data = get_serp_results(keyword)
+    prompt = f"Analyze SERP for '{keyword}': {json.dumps(serp_data)}. Suggest rank improvements, related keywords, and deduplicate."
+    response = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    analysis = response.choices[0].message.content
+    # Extract related (mock parse)
+    related = [kw.strip() for kw in analysis.split('\n') if kw.startswith('- Related:')]
+    # Save report
+    save_report(analysis)
+    return analysis, related
 
-# Example Run (extend tasks as needed)
+def save_report(report_content):
+    """Save report to DB."""
+    date = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute("INSERT INTO reports (date, report) VALUES (?, ?)", (date, report_content))
+    conn.commit()
+
+# Module 3: Analyze & Save Keyword Performance
+def get_ranks(keywords):
+    """Get current ranks."""
+    ranks = {}
+    for kw in keywords:
+        serp = get_serp_results(kw)
+        ranks[kw] = serp[0]['position'] if serp else None  # Assume top result is target site
+    return ranks
+
+def cluster_keywords(keywords, ranks):
+    """Use GPT or KMeans for clustering."""
+    data = pd.DataFrame({'keyword': keywords, 'rank': [ranks.get(kw, 0) for kw in keywords]})
+    # GPT cluster
+    prompt = f"Cluster these keywords by theme: {data.to_json()}"
+    response = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    clusters = response.choices[0].message.content
+    # Alternative: KMeans on embeddings (simplified)
+    # For production, use OpenAI embeddings + KMeans
+    for kw, cluster in zip(keywords, clusters.split('\n')):  # Mock parse
+        cursor.execute("UPDATE keywords SET cluster = ? WHERE keyword = ?", (cluster, kw))
+    conn.commit()
+    return clusters
+
+# Module 4: Create Report & Rewrite Article
+def create_full_report(ga_analysis, serp_analysis, clusters):
+    """Compile report."""
+    report = f"GA4 Analysis: {ga_analysis}\nSERP Analysis: {serp_analysis}\nClusters: {clusters}"
+    save_report(report)
+    return report
+
+def rewrite_article(original_text, keywords):
+    """Rewrite for SEO."""
+    prompt = f"Rewrite this article incorporating keywords {keywords} for better SEO: {original_text}"
+    response = openai_client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    return response.choices[0].message.content
+
+# Update Functionality
+def update_data(property_id, start_date=None, end_date=None, keywords=[]):
+    """Pull fresh data and update DB."""
+    if not start_date:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    report_df = get_ga_report(property_id, start_date, end_date)
+    ga_analysis = analyze_ga_metrics(report_df)
+    upload_keywords(keywords)
+    for kw in keywords:
+        serp_analysis, related = analyze_serp(kw)
+        upload_keywords(related)  # Add related
+    ranks = get_ranks(keywords)
+    clusters = cluster_keywords(keywords, ranks)
+    full_report = create_full_report(ga_analysis, serp_analysis, clusters)
+    return full_report
+
+# Backtesting
+def backtest(property_id, historical_start, historical_end, mock_keywords, mock_serp_data=None):
+    """Simulate workflow on historical data."""
+    # Pull historical GA4
+    historical_df = get_ga_report(property_id, historical_start, historical_end)
+    ga_analysis = analyze_ga_metrics(historical_df)
+    # Mock SERP if no real historical (use provided or simulate)
+    if not mock_serp_data:
+        mock_serp_data = {kw: [{'position': 5, 'title': 'Mock', 'snippet': 'Mock'}] for kw in mock_keywords}
+    ranks = {kw: mock_serp_data[kw][0]['position'] for kw in mock_keywords}
+    clusters = cluster_keywords(mock_keywords, ranks)
+    # Simulate optimization: Assume 20% rank improvement
+    simulated_ranks = {kw: max(1, ranks[kw] - int(ranks[kw]*0.2)) for kw in mock_keywords}
+    # Calculate metrics: e.g., estimated traffic uplift (simplified formula)
+    uplift = sum([100 / r for r in simulated_ranks.values()]) - sum([100 / r for r in ranks.values()])
+    return f"Backtest Results: Uplift {uplift:.2f}%. GA: {ga_analysis}\nClusters: {clusters}"
+
+# Main Execution Example
 if __name__ == "__main__":
-    continuous_learning(tasks=['add', 'mul', 'sub'])  # Add more for logic/math
+    # Example usage: Update
+    PROPERTY_ID = 'your-ga4-property-id'  # Replace
+    keywords = ['blockchain decoding', 'crypto trading']
+    report = update_data(PROPERTY_ID, keywords=keywords)
+    print("Updated Report:", report)
+    
+    # Example: Rewrite
+    original = "This is a sample crypto article."
+    rewritten = rewrite_article(original, keywords)
+    print("Rewritten Article:", rewritten)
+    
+    # Example: Backtest
+    hist_start = '2023-01-01'
+    hist_end = '2023-12-31'
+    mock_kw = keywords
+    backtest_result = backtest(PROPERTY_ID, hist_start, hist_end, mock_kw)
+    print("Backtest:", backtest_result)
+
+# Testing
+class TestSEOWorkflow(unittest.TestCase):
+    def test_get_ga_report(self):
+        # Mock property_id for test; in real, use valid
+        try:
+            df = get_ga_report('invalid-for-test', '2024-01-01', '2024-01-02')
+            self.assertIsInstance(df, pd.DataFrame)
+        except Exception as e:
+            self.assertIn("error", str(e).lower())  # Expect error on invalid
+
+    def test_analyze_ga_metrics(self):
+        mock_df = pd.DataFrame({'page': ['/home'], 'users': [100], 'sessions': [200]})
+        analysis = analyze_ga_metrics(mock_df)
+        self.assertTrue(len(analysis) > 0)
+
+    def test_get_serp_results(self):
+        results = get_serp_results('test keyword')
+        self.assertIsInstance(results, list)
+
+    def test_cluster_keywords(self):
+        kw = ['test1', 'test2']
+        ranks = {'test1': 1, 'test2': 2}
+        clusters = cluster_keywords(kw, ranks)
+        self.assertTrue(len(clusters) > 0)
+
+    def test_backtest(self):
+        result = backtest('invalid', '2023-01-01', '2023-01-02', ['test'], {'test': [{'position': 10}]})
+        self.assertIn("Uplift", result)
+
+if __name__ == "__main__":
+    unittest.main(argv=[''], verbosity=2, exit=False)  # Run tests
